@@ -1,67 +1,94 @@
-// COMMAND PROCESSING
+// The control tree is a basic hierarchical object tree
 // The following attributes and functions facilitate command processing
 /*
-command subscriptions are kept in an object tree which might look like this:
+signal subscriptions are kept in an object tree which might look like tree:
 
 {
+  value: {
+    .... tree specific content ....
+  }
   label: "_top",
-  processors: [...],
   children: [
     lupin: {
+      value: {
+        .... tree specific content ....
+      }
       label: "lupin",
-      processors: [...],
       children: [
         init: {
           label: "init",
-          processors: [...]
+          value: {
+            .... tree specific content ....
+          }
         }
       ]
-    },
-    todo:...
+    }, ...
 }
+
+Signals could be internal commands, state change-events, or 
+requests/commands from any external source. 
+
 */
 
 
 // function for getting a value in the command, observer, or log control trees
-function GetNode( 
+function getIn( 
+    tree,  // tree to find node in
     path)  //  path = ["lupin","init"] form
 {
-  if( path.length) {
-    var name = path[ 0]
-    if (! ( name in this.children)) return null
-    return this.children[name].getIn( path.slice(1));
+  if( !path.length) {
+    // stepped down as far as the provided list, Return it.
+    return tree
   }
-  // stepped down as far as the provided list, Return it.
-  return this
-} 
 
-// fetch the values of the entire path (top to bottom) as an array
-function GetValues( 
-    path, //  path = ["lupin","init"] form
-    getter, // method to fetch the value of a specific node
-    result) // array to hold the result
-{
-  if ( result === undefined ) {
-    result = getter( this) 
-  } else {
-    result = result.concat( getter (this))
-  }
-  if( !path.length) return result // stepped down as far as the provided list, Return it.
   var name = path[ 0]
-  if (! ( name in this.children)) return result
-  return this.children[name].getValues(path.slice(1), getter, result);
-} 
+  if( tree.children !== undefined) {
+    for ( var child in tree.children)) {
+      if ( child.label == name) return getIn( tree.children[name], path.slice(1));
+    }
+  }
+ // none found 
+  return null
+}
+ 
 
 // set a value in the command, observer, or log control trees
-function SetNode( 
+function setIn( 
+  tree,  // tree to add node to
   path,  // path = ['lupin', 'init'] form
-  setter) // function to set the content of the node
+  obj)   // object content of the node
 {
-  if (!path.length) return setter( this) // at the requested node, set the value
+  var child
+
+  if (!path.length) {
+    // at the requested node, set the value
+    Object.getOwnPropertyNames( obj).forEach( (key) => tree[ key] = obj[ key] )
+    return tree
+  }
   var name = path[ 0]  // save the current label
-  if( !(name in this.children))  // does this object have the subtree requested?
-    this.children[name] = this.newNode( name, this) // no, so create it
-  return this.children[name].setIn( path.slice(1), setter)  // navigate down a layer and repeat
+  if ( tree.children !== undefined) {
+    for( child in tree.children) {
+      // does tree object have the subtree requested?
+      if (child.label == name) {
+        // navigate down a layer and repeat
+        return setIn( child, path.slice(1), obj)
+    }
+  } else {
+    tree.children = []
+  }
+  // found none
+  tree.children.push( child = { label: name)) // create it
+  return setIn( child, path.slice(1), obj)
 } 
 
-export { GetNode, SetNode, GetValues }
+
+function module ( 
+  name,  // the name of the module
+  postprocessor,  // processor to clean up after the module signal processors
+  catcher         // processor to handle unprocessed commands in this module's namespace
+{
+  return { label: name, postprocessor, catcher}
+}
+
+
+export default { getIn, SetIn, module }
