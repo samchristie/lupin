@@ -8,6 +8,7 @@
     "url": "git+https://github.com/shader/lupin.git"
   },
   "dependencies": {
+    "immutable": "*",
     "most": "*"
   },
   "devDependencies": {

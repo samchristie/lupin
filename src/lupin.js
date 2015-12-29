@@ -1,54 +1,32 @@
-import  './controlTree'
-import  './core'
+import './controlTree'
+import init from './core'
 
-
-function load(state, source) {
-  this.invoke( {_ctrl: { type: 'lupin.load', source}, state})
-}
-
-// default log output function
-function logPuter( signal) {  
+function logPuter( state, signal) {  
   console.log( 
     "Log: ",
     signal._ctrl.type[2], 
     JSON.stringify(signal._ctrl.source), 
     JSON.stringify(signal.parameters)
   );
+  // return nothing
 }
 
-// construct a method to invoke a new command, bind it to a signal tree
-command( // create the command invocation function. Returns the function.
-  ptree, // tree of filters and processors
-  cmdPath, // full pathname of the command which this function will invoke
-            // can be either a string delimited with '.' or an array of strings
-            //  e.g.: "lupin.init" or ["lupin", "init"]
-  processor) // function to be invoked to execute on the subscribed command set
-             // this function must fit the signature 
-             // processor( state, command) -> [ state, effect, ...]]
-  {
-  // convert the path from "lupin.init" to ["lupin","init"] if required
-  var path = (typeof cmdPath === 'string') ? cmdPath.split('.') : cmdPath;
 
-   // subscribe the processor to this command
-  setIn( ptree, path, (val) => val.processors.push( processor) );
-  // should rebuild ptree here
+// configure and start the lupin system
+// all parameters are optional
+// Config object used so the parameters actually provided are named
+// valid ones are:
+//  initialState, initial state object to load into lupin, should be an immutable map
+//  signal$,      stream of signals to drive solution - e.g. TCP listener, worker eventSource
 
-  // define the command generation function and return it
-  return ( parameters, source ) => {
-    var signal
-    if ( arguments.length > 1) {
-      signal = { _ctrl: {type: path, source } }
-    } else {
-      signal = { _ctrl: {type: path } }
-    }
-    if( arguments.length) {
-      Object.getOwnPropertyNames( parameters).forEach( (key) => signal[ key] = parameters[ key] )
-    }  
-    // call for the command
-    this.invoke( signal)  // the source is the last argument
-  }
-},
+// future?:
+//  commandTree,  tree of signal processors 
+// observers      tree of state observers
 
+function lupin( cfg)
+{
+  let core = cfg ? init( cfg.signal$, cfg.initialState ) : init(),
+  api = {
     invoke(  // interface to issue a command for processing
       cmd, // command signal object including command:_type and parameters
       source)  // source trace object
@@ -71,9 +49,54 @@ command( // create the command invocation function. Returns the function.
       //printStackTrace()
 
       // actual most call to emmit the command to the stream
-      this.signals.push( cmd);  
+      core.getIn( ['lupin','core','event$']).push( cmd)  
     },
 
+    // convenience function to start a module specific command tree
+    module( 
+      modulePath,
+      postprocessor,  // processor to clean up after the module signal processors
+      catcher)         // processor to handle unprocessed commands in this module's namespace
+    {
+      // convert the path from "lupin.init" to ["lupin","init"] if required
+      var path = (typeof modulePath === 'string') ? modulePath.split('.') : modulePath;
+
+      this.invoke( { _ctrl:{ type:[ "lupin", "AddModule"]}, 
+        path, postprocessor, catcher })
+    },
+
+    // construct a method to invoke a new command, bind it to a signal tree
+    command( // create the command invocation function. Returns the function.
+      cmdPath, // full pathname of the command which this function will invoke
+                // can be either a string delimited with '.' or an array of strings
+                //  e.g.: "lupin.init" or ["lupin", "init"]
+      proc) // function to be invoked to execute on the subscribed command set
+                 // this function must fit the signature 
+                 // processor( state, command) -> [ state, effect, ...]]
+      {
+      // convert the path from "lupin.init" to ["lupin","init"] if required
+      var path = (typeof cmdPath === 'string') ? cmdPath.split('.') : cmdPath;
+
+       // subscribe the processor to this command
+      this.invoke( { _ctrl:{ type:[ "lupin", "AddProcessor"]}, path, proc})
+
+      // define the command generation function and return it
+      return ( parameters, source ) => {
+        var signal
+        if ( arguments.length > 1) {
+          signal = { _ctrl: {type: path, source } }
+        } else {
+          signal = { _ctrl: {type: path } }
+        }
+        if( arguments.length) {
+          Object.getOwnPropertyNames( parameters).forEach( (key) => signal[ key] = parameters[ key] )
+        }  
+        // call for the command
+        this.invoke( signal)  // the source is the last argument
+      }
+    },
+
+    
     observe( // establish and connect a state observation stream
       statePath,  // path selecting sub tree of the state for observation
       observer   // function observer( stateSubtree)  return value is ignored
@@ -81,7 +104,7 @@ command( // create the command invocation function. Returns the function.
       // convert the path from "lupin.init" to ["lupin","init"] if required
       var path = (typeof statePath === 'string') ? statePath.split('.') : statePath;
 
-      observers.setIn( path, (val) => val.state$.observe( observer) )
+      this.invoke( { _ctrl:{ type:[ "lupin", "AddObserver"]}, path, observer})
     },
 
     // logs are just signals in the name space 'lupin.log.[debug, error, status].level'
@@ -100,15 +123,24 @@ command( // create the command invocation function. Returns the function.
       this.invoke( {_ctrl: { type: [ 'lupin', 'log', mode], source}, parameters: args})
     },
 
+    // convenience function to create a log listener
+    logSubscribe(
+      logFunction, // function to subscribe e.g.: console.log.bind(console)
+      mode) // one of "debug", "status", or "error"
+    {
+      mode = mode ? "." + mode : ""
+      this.command( "lupin.log" + mode, logFunction )
+    }, 
+
     // define selected command messages to be copied to the log stream
     debugSet( 
         cmdPath, // command path to filter into the log stream
         mode) {  // one of: 'log' or 'trace' - log=once, trace=each processor invoked
       // convert the path from "lupin.init" to ["lupin","init"] if required
       var path = (typeof cmdPath === 'string') ? cmdPath.split('.') : cmdPath;
-      mode = (mode !== undefined && mode != 'trace') ? 'log' : 'trace'
+      var debug = (mode !== undefined && mode != 'trace') ? 'log' : 'trace'
 
-      this.cmdProcessors.setIn( path, (val) => val.debug = mode )
+      this.invoke( {_ctrl: { type: [ 'lupin', 'setDebug'], source}, path, debug } )
     },
 
     // discontinue logging selected command messages 
@@ -116,13 +148,10 @@ command( // create the command invocation function. Returns the function.
       // convert the path from "lupin.init" to ["lupin","init"] if required
       var path = (typeof cmdPath === 'string') ? cmdPath.split('.') : cmdPath;
 
-      cmdProcessors.setIn( path, (val) => val.debug = false)
-    },
+      this.invoke( {_ctrl: { type: [ 'lupin', 'setDebug'], source}, path, debug: false } )
+    }
+  }
+  return api
+}
 
-    // convenience function to create a log listener
-    logSubscribe(
-      logFunction, // function to subscribe e.g.: console.log.bind(console)
-      mode) // one of "debug", "status", or "error"
-    {
-      this.logStream[mode].observe( logFunction)
-    } 
+export { lupin, logPuter}
